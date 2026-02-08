@@ -1,0 +1,9 @@
+project1_v1_1/debug_outs
+project1_v1_1/ref_outs
+project1_v1_1/short_traces
+project1_v1_1/student_outs
+project1_v1_1/traces
+
+# Build artifacts
+*.o
+cachesim
