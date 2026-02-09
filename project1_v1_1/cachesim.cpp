@@ -6,7 +6,7 @@ struct CacheBlock {
     uint64_t tag = 0;
     bool valid = false;
     bool dirty = false;
-    uint64_t lru_count = 0;
+    uint64_t last_used = 0; // timestamp
 };
 static std::vector<std::vector<CacheBlock>> l1_cache;
 // L1 Cache: Outer Vector: sets within the cache
@@ -54,18 +54,145 @@ void sim_setup(sim_config_t *config) {
             l1_cache[i][w].valid = false;
             l1_cache[i][w].dirty = false;
             l1_cache[i][w].tag = 0;
-            l1_cache[i][w].lru_count = 0;
+            l1_cache[i][w].last_used = 0;
         }
     }
 
+}
+static inline void touch_block(CacheBlock &block) {
+    block.last_used = ++global_count;
+}
+static int pick_victim(std::vector<CacheBlock>& set) {
+    
+    // 1) Use an invalid block
+    for (int way = 0; way < (int)set.size(); way++) {
+        if (!set[way].valid) {
+            return way;
+        }
+    }
+
+    // 2) Evict LRU otherwise
+    int victim = 0;  // Start with way 0 as default
+    uint64_t smallest_cnt = set[0].last_used;
+    for (int way = 1; way < (int)set.size(); way++) {
+        uint64_t cnt = set[way].last_used;
+        if (cnt < smallest_cnt) {
+            victim = way;
+            smallest_cnt = cnt;
+        }
+    }
+    return victim;
 }
 /**
  * Subroutine that simulates the cache one trace event at a time.
  * TODO: You're responsible for completing this routine
  */
 void sim_access(char rw, uint64_t addr, sim_stats_t* stats) {
+    // rw, R for read, W for write
+    // addr: 64 bit address
+    // stat: referenced which needs to be updated
 
+    stats->accesses_l1 += 1;
+
+    // Decompose the Address, Split 64-bit address
+    uint64_t offset_bits = addr & ((1ULL << l1_b_bits) - 1);
+    uint64_t index_bits = (addr >> l1_b_bits) & ((1ULL << l1_idx_bits) - 1);
+    uint64_t tag = addr >> (l1_b_bits + l1_idx_bits);
+    // >> 
+        // 0b1010 1100, then (0b1010 1100) >> 4 equals 0b0000 1010
+    // <<
+        // 0b1010 1100, then (0b1010 1100) >> 4 equals 0b1100 0000
+
+    // Search the Cache (Check for Hit)
+        // If any one way in the set has valid == 1 or block.tag == tag then its a HIT
+    auto &indexed_set = l1_cache[index_bits];
+    int hit_way = -1;
+    CacheBlock* hit_block = nullptr;
+    for (int way = 0; way < (int)l1_associativity; way++) {
+        CacheBlock &blk = indexed_set[way];
+        if (blk.tag == tag && blk.valid) {
+            hit_way = way;
+            hit_block = &blk;
+            break; 
+        }
+    }
+    // If cache_hit is -1, Cache Miss
+    if (hit_way == -1) {
+        stats->misses_l1 += 1;
+    } else {
+        stats->hits_l1 += 1;
+    }
+
+    // READ 
+    if (rw == 'R' || rw == 'r') {
+        stats->reads++;
+        // READ HIT
+            // 1) Update block LRU Count
+            // 2) Return the data from cache line
+        if (hit_way != -1 and hit_block != nullptr) {
+            touch_block(*hit_block); 
+            return;
+        }
+        // READ MISS
+            // 1) Choose a victim, look into pick_victim function
+            // 2) if victim.dirty true, writeback the victim to next blk
+            // 3) Fetch requested blk from L2->L1
+            // 4) Install new block (Valid=1, Tag=New Tag, Dirty=0)
+            // 5) MRU in the set
+            // 6) Return this data 
+        int victim_way = pick_victim(indexed_set);
+        CacheBlock &victim = indexed_set[victim_way];
+        if (victim.valid && victim.dirty) stats->write_backs_l1++;
+        // Bring New Block
+        victim.valid = true;
+        victim.dirty = false;
+        victim.tag = tag;
+        touch_block(victim);
+        return;
+    
+    } else if (rw == 'W' || rw == 'w') {
+        stats->writes++;
+        // WRITE HIT
+            // dont write to mem
+            // modify the cache line and mark it dirty
+        if (hit_way != -1 and hit_block != nullptr) {
+            hit_block->dirty = true;
+            touch_block(*hit_block);
+            return;
+        } else {
+        // WRITE MISS
+            // 1) Choose Victim Using LRU
+            // 2) If Victim is dirty writeback victim to next block
+            // 3) Fetch the request block from L2->L1 (allocate on miss)
+            // 4) Install the new block (valid=1, tag = new tag)
+            // 5) Perform the write on new line
+            // 6) Set dirty = 1
+            // 7) MRU insertion 
+            int victim_way = pick_victim(indexed_set);
+            CacheBlock &victim = indexed_set[victim_way];
+            if (victim.valid && victim.dirty) stats->write_backs_l1++;
+            // Bring New Block
+            victim.valid = true;
+            victim.dirty = true;  // Writing to block, so dirty
+            victim.tag = tag;
+            touch_block(victim);
+            return;
+        }
+    }
 }
+
+// typedef struct sim_stats {
+//     // Overall
+//     uint64_t reads;
+//     uint64_t writes;
+//     // L1
+//     uint64_t accesses_l1;
+//     uint64_t hits_l1;
+//     uint64_t misses_l1;
+//     double hit_ratio_l1;
+//     double miss_ratio_l1;
+//     double avg_access_time_l1;
+//     uint64_t write_backs_l1;
 
 /**
  * Subroutine for cleaning up any outstanding memory operations and calculating overall statistics
@@ -73,3 +200,17 @@ void sim_access(char rw, uint64_t addr, sim_stats_t* stats) {
  * TODO: You're responsible for completing this routine
  */
 void sim_finish(sim_stats_t *stats) {
+    // L1 ratios
+    if (stats->accesses_l1 > 0) {
+        stats->hit_ratio_l1 = (double)stats->hits_l1 / stats->accesses_l1;
+        stats->miss_ratio_l1 = (double)stats->misses_l1 / stats->accesses_l1;
+    }
+
+    // L1 hit time = HIT_TIME_CONST + HIT_TIME_PER_S * S
+    uint64_t S1 = 0, temp = l1_associativity;
+    while (temp > 1) { temp >>= 1; S1++; }
+    double l1_hit_time = L1_HIT_TIME_CONST + L1_HIT_TIME_PER_S * S1;
+
+    // L1 AAT = L1_HT + miss_ratio * L2_AAT
+    stats->avg_access_time_l1 = l1_hit_time + stats->miss_ratio_l1 * stats->avg_access_time_l2;
+}
