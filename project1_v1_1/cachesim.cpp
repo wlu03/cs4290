@@ -142,7 +142,11 @@ void sim_access(char rw, uint64_t addr, sim_stats_t* stats) {
             // 6) Return this data 
         int victim_way = pick_victim(indexed_set);
         CacheBlock &victim = indexed_set[victim_way];
-        if (victim.valid && victim.dirty) stats->write_backs_l1++;
+        if (victim.valid && victim.dirty) {
+            stats->write_backs_l1++;
+            stats->writes_l2++;  // writeback goes to L2
+        }
+        stats->reads_l2++;  // fetch block from L2
         // Bring New Block
         victim.valid = true;
         victim.dirty = false;
@@ -170,7 +174,11 @@ void sim_access(char rw, uint64_t addr, sim_stats_t* stats) {
             // 7) MRU insertion 
             int victim_way = pick_victim(indexed_set);
             CacheBlock &victim = indexed_set[victim_way];
-            if (victim.valid && victim.dirty) stats->write_backs_l1++;
+            if (victim.valid && victim.dirty) {
+                stats->write_backs_l1++;
+                stats->writes_l2++;  // writeback goes to L2
+            }
+            stats->reads_l2++;  // fetch block from L2 (write-allocate)
             // Bring New Block
             victim.valid = true;
             victim.dirty = true;  // Writing to block, so dirty
@@ -210,6 +218,20 @@ void sim_finish(sim_stats_t *stats) {
     uint64_t S1 = 0, temp = l1_associativity;
     while (temp > 1) { temp >>= 1; S1++; }
     double l1_hit_time = L1_HIT_TIME_CONST + L1_HIT_TIME_PER_S * S1;
+
+    // L2 AAT when disabled = DRAM time
+    // DRAM_AT + (block_size / WORD_SIZE) * DRAM_AT_PER_WORD
+    uint64_t block_size = 1ULL << l1_b_bits;
+    double dram_time = DRAM_AT + ((double)block_size / WORD_SIZE) * DRAM_AT_PER_WORD;
+    stats->avg_access_time_l2 = dram_time;
+
+    // L2 read stats (when L2 disabled, all reads are misses)
+    stats->read_misses_l2 = stats->reads_l2;
+    stats->read_hits_l2 = 0;
+    if (stats->reads_l2 > 0) {
+        stats->read_hit_ratio_l2 = 0.0;
+        stats->read_miss_ratio_l2 = 1.0;
+    }
 
     // L1 AAT = L1_HT + miss_ratio * L2_AAT
     stats->avg_access_time_l1 = l1_hit_time + stats->miss_ratio_l1 * stats->avg_access_time_l2;
