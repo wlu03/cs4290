@@ -8,7 +8,16 @@ struct CacheBlock {
     bool dirty = false;
     uint64_t last_used = 0; // timestamp
 };
+struct MarkovEntry {
+    uint64_t count;
+    uint64_t next_block_addr;
+}
+struct MarkovRow {
+    std::vector<MarkovEntry> entries;
+    
+}
 static std::vector<std::vector<CacheBlock>> l1_cache;
+static std::vector<std::vector<CacheBlock>> l2_cache;
 // L1 Cache: Outer Vector: sets within the cache
 // L1 Cache: Inner Vector: ways within a set, each way is a block (line)
 // Total Cache Size is 2^{C_1} byte 
@@ -27,16 +36,32 @@ static uint64_t l1_idx_bits; // Log_2(Number of Sets) = C1-B-S1
 static uint64_t l1_associativity; // Number of Ways 2^S1
 static uint64_t global_count = 0;
 
+static uint64_t l2_b_bits; // Block Bits (B)
+static uint64_t l2_sets; // 2^{C2 - B - S2}
+static uint64_t l2_idx_bits; // Log_2(Number of Sets) = C2-B-S2
+static uint64_t l2_associativity; // Number of Ways 2^S2
+
+
 /**
  * Subroutine for initializing the cache simulator. You many add and initialize any global or heap
  * variables as needed.
  * TODO: You're responsible for completing this routine
  */
 void sim_setup(sim_config_t *config) {
-    const cache_config_t& l1_cfg = config->l1_config; // & used because it's passed by ref
+
+    // Setup Config for L1 and L2
+    const cache_config_t& l1_cfg = config->l1_config;
     uint64_t C1 = l1_cfg.c;
     uint64_t B = l1_cfg.b;
     uint64_t S1 = l1_cfg.s;
+    const cache_config_t& l2_cfg = config->l2_config;
+    uint64_t C2 = l2_cfg.c;
+    uint64_t B = l2_cfg.b;
+    uint64_t S2 = l2_cfg.s;
+    l2_cfg.n_markov_rows;
+
+    // Setup Up Markov Table
+    
 
     // store as global variables
     l1_b_bits = B;
@@ -188,19 +213,6 @@ void sim_access(char rw, uint64_t addr, sim_stats_t* stats) {
         }
     }
 }
-
-// typedef struct sim_stats {
-//     // Overall
-//     uint64_t reads;
-//     uint64_t writes;
-//     // L1
-//     uint64_t accesses_l1;
-//     uint64_t hits_l1;
-//     uint64_t misses_l1;
-//     double hit_ratio_l1;
-//     double miss_ratio_l1;
-//     double avg_access_time_l1;
-//     uint64_t write_backs_l1;
 
 /**
  * Subroutine for cleaning up any outstanding memory operations and calculating overall statistics
